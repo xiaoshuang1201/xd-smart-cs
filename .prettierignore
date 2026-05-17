@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.nuxt/
+.output/
+coverage/
+pnpm-lock.yaml
+docker-data/
+*.md

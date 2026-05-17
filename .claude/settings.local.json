@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(superpowers:brainstorming)",
+      "Skill(superpowers:brainstorming:*)",
+      "Bash(pnpm install *)",
+      "Bash(npx ts-node *)"
+    ]
+  }
+}

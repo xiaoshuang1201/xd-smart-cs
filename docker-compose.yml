@@ -1,0 +1,187 @@
+version: '3.8'
+
+# 本地开发 Docker 编排 —— 启动全部基础设施容器
+# 使用: docker compose up -d
+
+services:
+  # ===================== PostgreSQL 15 =====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: xd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: xd_smart_cs
+      POSTGRES_USER: xd_user
+      POSTGRES_PASSWORD: xd_pass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U xd_user -d xd_smart_cs']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===================== Redis 7 =====================
+  redis:
+    image: redis:7-alpine
+    container_name: xd-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 2gb
+      --maxmemory-policy volatile-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===================== MinIO 对象存储 =====================
+  minio:
+    image: minio/minio:latest
+    container_name: xd-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===================== Milvus Lite (Standalone) =====================
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: xd-milvus
+    restart: unless-stopped
+    command: ['milvus', 'run', 'standalone']
+    environment:
+      ETCD_USE_EMBED: 'true'
+      COMMON_STORAGETYPE: local
+    ports:
+      - '19530:19530'
+      - '9091:9091'
+    volumes:
+      - milvusdata:/var/lib/milvus
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9091/healthz']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ===================== Dify 社区版 API 容器 =====================
+  dify-api:
+    image: langgenius/dify-api:0.11.0
+    container_name: xd-dify-api
+    restart: unless-stopped
+    environment:
+      MODE: api
+      LOG_LEVEL: INFO
+      SECRET_KEY: xd-dify-secret-key-change-in-production
+      DB_USERNAME: xd_user
+      DB_PASSWORD: xd_pass
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_DATABASE: xd_smart_cs_dify
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_DB: '1'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: storage
+    ports:
+      - '5001:5001'
+    volumes:
+      - difystorage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:5001/health']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  dify-worker:
+    image: langgenius/dify-api:0.11.0
+    container_name: xd-dify-worker
+    restart: unless-stopped
+    environment:
+      MODE: worker
+      LOG_LEVEL: INFO
+      SECRET_KEY: xd-dify-secret-key-change-in-production
+      DB_USERNAME: xd_user
+      DB_PASSWORD: xd_pass
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_DATABASE: xd_smart_cs_dify
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_DB: '1'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: storage
+    volumes:
+      - difystorage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ===================== BGE Embedding 微服务 =====================
+  bge-embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: xd-bge-embedding
+    restart: unless-stopped
+    command: >
+      --model-id BAAI/bge-large-zh-v1.5
+      --revision main
+      --dtype float32
+      --pooling cls
+      --max-concurrent-requests 32
+      --max-batch-tokens 16384
+    ports:
+      - '8000:80'
+    volumes:
+      - bgecache:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:80/health']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  miniodata:
+    driver: local
+  milvusdata:
+    driver: local
+  difystorage:
+    driver: local
+  bgecache:
+    driver: local

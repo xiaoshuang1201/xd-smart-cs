@@ -1,0 +1,16 @@
+{
+  "name": "@xd/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
+    "clean": "rimraf dist node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

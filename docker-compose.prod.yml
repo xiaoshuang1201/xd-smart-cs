@@ -1,0 +1,351 @@
+version: '3.8'
+
+# 生产环境 Docker 编排
+# 使用: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  # ===================== Nginx 反向代理 =====================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: xd-nginx
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      nest-backend:
+        condition: service_healthy
+      nuxt-web:
+        condition: service_started
+      admin-frontend:
+        condition: service_started
+    networks:
+      - xd-network
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m'
+        max-file: '5'
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ===================== PostgreSQL 15 =====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: xd-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: xd_smart_cs
+      POSTGRES_USER: ${DB_USER:-xd_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    expose:
+      - '5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-xd_user} -d xd_smart_cs']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - xd-network
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '10'
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ===================== Redis 7 =====================
+  redis:
+    image: redis:7-alpine
+    container_name: xd-redis
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 2gb
+      --maxmemory-policy volatile-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    expose:
+      - '6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - xd-network
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '50m'
+        max-file: '5'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ===================== MinIO 对象存储 =====================
+  minio:
+    image: minio/minio:RELEASE.2024-01-01T00-00-00Z
+    container_name: xd-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    expose:
+      - '9000'
+    ports:
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ===================== Milvus Standalone =====================
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: xd-milvus
+    restart: always
+    command: ['milvus', 'run', 'standalone']
+    environment:
+      ETCD_USE_EMBED: 'true'
+      COMMON_STORAGETYPE: local
+    expose:
+      - '19530'
+    ports:
+      - '127.0.0.1:9091:9091'
+    volumes:
+      - milvusdata:/var/lib/milvus
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9091/healthz']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ===================== Dify 社区版 =====================
+  dify-api:
+    image: langgenius/dify-api:0.11.0
+    container_name: xd-dify-api
+    restart: always
+    environment:
+      MODE: api
+      LOG_LEVEL: INFO
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      DB_USERNAME: ${DB_USER:-xd_user}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_DATABASE: xd_smart_cs_dify
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_DB: '1'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: storage
+    expose:
+      - '5001'
+    volumes:
+      - difystorage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  dify-worker:
+    image: langgenius/dify-api:0.11.0
+    container_name: xd-dify-worker
+    restart: always
+    environment:
+      MODE: worker
+      LOG_LEVEL: INFO
+      SECRET_KEY: ${DIFY_SECRET_KEY}
+      DB_USERNAME: ${DB_USER:-xd_user}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_DATABASE: xd_smart_cs_dify
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      REDIS_DB: '1'
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: storage
+    volumes:
+      - difystorage:/app/api/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ===================== BGE Embedding 微服务 =====================
+  bge-embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: xd-bge-embedding
+    restart: always
+    command: >
+      --model-id BAAI/bge-large-zh-v1.5
+      --revision main
+      --dtype float32
+      --pooling cls
+      --max-concurrent-requests 32
+      --max-batch-tokens 16384
+    expose:
+      - '80'
+    volumes:
+      - bgecache:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:80/health']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  # ===================== Nest.js 后端 =====================
+  nest-backend:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: production
+    container_name: xd-nest-backend
+    restart: always
+    environment:
+      NODE_ENV: production
+      APP_PORT: '3100'
+      DATABASE_URL: postgresql://${DB_USER:-xd_user}:${DB_PASSWORD}@postgres:5432/xd_smart_cs
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: '9000'
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: '19530'
+      DIFY_API_URL: http://dify-api:5001/v1
+      DIFY_API_KEY: ${DIFY_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      BGE_EMBEDDING_URL: http://bge-embedding:80
+      JWT_SECRET: ${JWT_SECRET}
+    expose:
+      - '3100'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    networks:
+      - xd-network
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3100/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ===================== Nuxt 3 官网前端 =====================
+  nuxt-web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: xd-nuxt-web
+    restart: always
+    expose:
+      - '3000'
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ===================== Vue 3 管理后台 =====================
+  admin-frontend:
+    build:
+      context: ./apps/admin
+      dockerfile: Dockerfile
+    container_name: xd-admin-frontend
+    restart: always
+    expose:
+      - '3001'
+    networks:
+      - xd-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  xd-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  miniodata:
+    driver: local
+  milvusdata:
+    driver: local
+  difystorage:
+    driver: local
+  bgecache:
+    driver: local

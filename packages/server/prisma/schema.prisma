@@ -1,0 +1,275 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================
+// 表1: 访客表 (visitors)
+// ========================
+model Visitor {
+  id            String         @id @default(uuid()) @db.Uuid
+  fingerprint   String         @unique @db.VarChar(64)
+  ipAddress     String?        @map("ip_address") @db.Inet
+  userAgent     String?        @map("user_agent") @db.Text
+  referrer      String?        @db.Text
+  firstSeenAt   DateTime       @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt    DateTime       @default(now()) @updatedAt @map("last_seen_at") @db.Timestamptz()
+  visitCount    Int            @default(1) @map("visit_count")
+  metadata      Json           @default("{}") @map("metadata")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+
+  conversations Conversation[]
+  rateLimits    RateLimit[]
+
+  @@index([lastSeenAt(sort: Desc)])
+  @@index([ipAddress])
+  @@map("visitors")
+}
+
+// ========================
+// 表2: 对话会话表 (conversations)
+// ========================
+model Conversation {
+  id                 String      @id @default(uuid()) @db.Uuid
+  visitorId          String      @map("visitor_id") @db.Uuid
+  sessionToken       String      @unique @map("session_token") @db.VarChar(128)
+  status             String      @default("active") @db.VarChar(20)
+  sourcePage         String?     @map("source_page") @db.VarChar(500)
+  sourceContext      Json        @default("{}") @map("source_context")
+  messageCount       Int         @default(0) @map("message_count")
+  agentConfidence    Float?      @map("agent_confidence")
+  transferredAt      DateTime?   @map("transferred_at") @db.Timestamptz()
+  transferredReason  String?     @map("transferred_reason") @db.VarChar(500)
+  resolvedById       String?     @map("resolved_by") @db.Uuid
+  resolvedAt         DateTime?   @map("resolved_at") @db.Timestamptz()
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+  closedAt           DateTime?   @map("closed_at") @db.Timestamptz()
+
+  visitor    Visitor     @relation(fields: [visitorId], references: [id])
+  messages   Message[]
+  workOrder  WorkOrder?
+  resolvedBy AdminUser?  @relation("ResolvedConversations", fields: [resolvedById], references: [id])
+
+  @@index([visitorId])
+  @@index([sessionToken])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// ========================
+// 表3: 消息表 (messages) — 按月分区（在 migration.sql 中手动创建）
+// ========================
+model Message {
+  id               String   @id @default(uuid()) @db.Uuid
+  conversationId   String   @map("conversation_id") @db.Uuid
+  role             String   @db.VarChar(10)
+  content          String   @db.Text
+  intent           String?  @db.VarChar(30)
+  confidenceScore  Float?   @map("confidence_score")
+  metadata         Json     @default("{}")
+  tokensUsed       Int?     @map("tokens_used")
+  retrievalSources Json     @default("[]") @map("retrieval_sources")
+  feedback         String?  @db.VarChar(10)
+  feedbackDetail   String?  @map("feedback_detail") @db.Text
+  feedbackAt       DateTime? @map("feedback_at") @db.Timestamptz()
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([intent, createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+// ========================
+// 表4: 管理员用户表 (admin_users)
+// ========================
+enum AdminRole {
+  super_admin
+  customer_service
+  knowledge_admin
+}
+
+model AdminUser {
+  id           String      @id @default(uuid()) @db.Uuid
+  username     String      @unique @db.VarChar(50)
+  passwordHash String      @map("password_hash") @db.VarChar(255)
+  displayName  String      @map("display_name") @db.VarChar(100)
+  email        String?     @db.VarChar(200)
+  phone        String?     @db.VarChar(20)
+  role         AdminRole   @default(customer_service)
+  status       String      @default("active") @db.VarChar(20)
+  lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz()
+  lastLoginIp  String?     @map("last_login_ip") @db.Inet
+  loginCount   Int         @default(0) @map("login_count")
+  avatarUrl    String?     @map("avatar_url") @db.VarChar(500)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+
+  refreshTokens       RefreshToken[]
+  workOrders          WorkOrder[]
+  knowledgeDocs       KnowledgeDoc[]
+  resolvedConversations Conversation[] @relation("ResolvedConversations")
+
+  @@index([role])
+  @@map("admin_users")
+}
+
+// ========================
+// 表5: 刷新令牌表 (refresh_tokens)
+// ========================
+model RefreshToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  adminUserId String    @map("admin_user_id") @db.Uuid
+  token       String    @unique @db.VarChar(500)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz()
+  revoked     Boolean   @default(false)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  adminUser AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ========================
+// 表6: 知识文档表 (knowledge_docs)
+// ========================
+model KnowledgeDoc {
+  id            String    @id @default(uuid()) @db.Uuid
+  title         String    @db.VarChar(500)
+  description   String?   @db.Text
+  fileType      String    @map("file_type") @db.VarChar(20)
+  filePath      String    @map("file_path") @db.VarChar(1000)
+  fileSize      BigInt?   @map("file_size")
+  fileHash      String?   @map("file_hash") @db.VarChar(64)
+  version       String    @default("1.0") @db.VarChar(50)
+  versionLabel  String?   @map("version_label") @db.VarChar(200)
+  chunkCount    Int       @default(0) @map("chunk_count")
+  totalTokens   Int?      @map("total_tokens")
+  status        String    @default("processing") @db.VarChar(20)
+  errorMessage  String?   @map("error_message") @db.Text
+  isActive      Boolean   @default(false) @map("is_active")
+  uploadedById  String?   @map("uploaded_by") @db.Uuid
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz()
+
+  uploadedBy AdminUser?       @relation(fields: [uploadedById], references: [id])
+  chunks     KnowledgeChunk[]
+
+  @@index([status])
+  @@index([uploadedById])
+  @@index([fileType])
+  @@index([title, version])
+  @@index([isActive])
+  @@map("knowledge_docs")
+}
+
+// ========================
+// 表7: 知识分块表 (knowledge_chunks)
+// ========================
+model KnowledgeChunk {
+  id          String   @id @default(uuid()) @db.Uuid
+  documentId  String   @map("document_id") @db.Uuid
+  chunkIndex  Int      @map("chunk_index")
+  content     String   @db.Text
+  tokenCount  Int?     @map("token_count")
+  vectorId    String?  @map("vector_id") @db.VarChar(100)
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  document KnowledgeDoc @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+  @@index([vectorId])
+  @@map("knowledge_chunks")
+}
+
+// ========================
+// 表8: 工单表 (work_orders)
+// ========================
+enum WorkOrderStatus {
+  pending
+  processing
+  resolved
+  closed
+}
+
+enum WorkOrderPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+model WorkOrder {
+  id               String            @id @default(uuid()) @db.Uuid
+  conversationId   String            @unique @map("conversation_id") @db.Uuid
+  title            String            @db.VarChar(300)
+  description      String            @db.Text
+  customerContact  String?           @map("customer_contact") @db.VarChar(200)
+  status           WorkOrderStatus   @default(pending)
+  priority         WorkOrderPriority @default(medium)
+  assigneeId       String?           @map("assignee_id") @db.Uuid
+  aiSummary        String?           @map("ai_summary") @db.Text
+  resolutionNotes  String?           @map("resolution_notes") @db.Text
+  assignedAt       DateTime?         @map("assigned_at") @db.Timestamptz()
+  resolvedAt       DateTime?         @map("resolved_at") @db.Timestamptz()
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  assignee     AdminUser?   @relation(fields: [assigneeId], references: [id])
+
+  @@index([status, priority])
+  @@index([assigneeId])
+  @@map("work_orders")
+}
+
+// ========================
+// 表9: 限流记录表 (rate_limits)
+// ========================
+model RateLimit {
+  id          String    @id @default(uuid()) @db.Uuid
+  visitorId   String    @map("visitor_id") @db.Uuid
+  endpoint    String    @db.VarChar(255)
+  count       Int       @default(1)
+  windowStart DateTime  @default(now()) @map("window_start") @db.Timestamptz()
+  ipAddress   String?   @map("ip_address") @db.Inet
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  visitor Visitor @relation(fields: [visitorId], references: [id])
+
+  @@index([visitorId, endpoint, windowStart])
+  @@index([expiresAt])
+  @@map("rate_limits")
+}
+
+// ========================
+// 表10: 系统配置表 (system_configs)
+// ========================
+model SystemConfig {
+  id          String   @id @default(uuid()) @db.Uuid
+  configKey   String   @unique @map("config_key") @db.VarChar(100)
+  configValue Json     @map("config_value")
+  description String?  @db.VarChar(500)
+  updatedBy   String?  @map("updated_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("system_configs")
+}

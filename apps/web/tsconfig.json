@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "paths": {
+      "~/*": ["./*"],
+      "@/*": ["./*"],
+      "@xd/shared": ["../../packages/shared/src"],
+      "@xd/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": ["./**/*.ts", "./**/*.vue"],
+  "exclude": ["node_modules", ".nuxt", ".output", "dist"]
+}

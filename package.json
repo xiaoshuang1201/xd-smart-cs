@@ -1,0 +1,60 @@
+{
+  "name": "xd-smart-cs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "新鼎电炉科技——智能客服系统 (XD-Agent-RAG-2026)",
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:web": "turbo dev --filter=@xd/web",
+    "dev:admin": "turbo dev --filter=@xd/admin",
+    "dev:server": "turbo dev --filter=@xd/server",
+    "build": "turbo build",
+    "build:web": "turbo build --filter=@xd/web",
+    "build:admin": "turbo build --filter=@xd/admin",
+    "build:server": "turbo build --filter=@xd/server",
+    "lint": "turbo lint",
+    "lint:fix": "turbo lint:fix",
+    "test": "turbo test",
+    "test:e2e": "turbo test:e2e",
+    "db:migrate": "turbo db:migrate --filter=@xd/server",
+    "db:migrate:dev": "turbo db:migrate:dev --filter=@xd/server",
+    "db:seed": "turbo db:seed --filter=@xd/server",
+    "db:studio": "turbo db:studio --filter=@xd/server",
+    "db:reset": "turbo db:reset --filter=@xd/server",
+    "clean": "turbo clean && rimraf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,vue,json,md,yaml,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,vue,json,md,yaml,yml}\"",
+    "docker:dev": "docker compose up -d",
+    "docker:dev:down": "docker compose down",
+    "docker:prod": "docker compose -f docker-compose.prod.yml up -d",
+    "docker:prod:down": "docker compose -f docker-compose.prod.yml down",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-vue": "^9.0.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0",
+    "prettier": "^3.2.0",
+    "rimraf": "^5.0.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,vue}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yaml,yml}": [
+      "prettier --write"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
