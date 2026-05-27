@@ -48,7 +48,7 @@ describe('AuthService', () => {
         status: 'active',
       }
       mockPrisma.adminUser.findUnique.mockResolvedValue(mockUser)
-      jest.spyOn(require('bcrypt'), 'compare').mockResolvedValue(true)
+      jest.spyOn(require('bcryptjs'), 'compare').mockResolvedValue(true)
 
       const result = await service.validateUser('admin', 'password')
 
@@ -66,7 +66,7 @@ describe('AuthService', () => {
         status: 'active',
       }
       mockPrisma.adminUser.findUnique.mockResolvedValue(mockUser)
-      jest.spyOn(require('bcrypt'), 'compare').mockResolvedValue(false)
+      jest.spyOn(require('bcryptjs'), 'compare').mockResolvedValue(false)
 
       const result = await service.validateUser('admin', 'wrong')
       expect(result).toBeNull()
