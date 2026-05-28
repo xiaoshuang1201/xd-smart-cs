@@ -6,17 +6,20 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 // Config
-import { appConfig, databaseConfig, redisConfig, jwtConfig, difyConfig, minioConfig, embeddingConfig } from './config/app.config';
+import { appConfig, databaseConfig, redisConfig, jwtConfig, difyConfig, minioConfig, embeddingConfig, deepseekConfig } from './config/app.config';
 
-// Infrastructure
+// Infrastructure (always needed)
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
+import { DifyModule } from './infrastructure/dify/dify.module';
+import { DeepSeekModule } from './infrastructure/deepseek/deepseek.module';
+import { SSEModule } from './infrastructure/sse/sse.module';
+
+// Infrastructure (RAG stack — only in full mode)
 import { MinioModule } from './infrastructure/minio/minio.module';
 import { MilvusModule } from './infrastructure/milvus/milvus.module';
-import { DifyModule } from './infrastructure/dify/dify.module';
 import { EmbeddingModule } from './infrastructure/embedding/embedding.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
-import { SSEModule } from './infrastructure/sse/sse.module';
 
 // Business Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -37,31 +40,33 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
 import { RequestLoggingInterceptor } from './common/interceptors/request-logging.interceptor';
 import { CustomValidationPipe } from './common/pipes/validation.pipe';
 
+const isFullMode = process.env.DEPLOY_MODE !== 'slim';
+
 @Module({
   imports: [
     // Global Config
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env', '.env.local'],
-      load: [appConfig, databaseConfig, redisConfig, jwtConfig, difyConfig, minioConfig, embeddingConfig],
+      load: [appConfig, databaseConfig, redisConfig, jwtConfig, difyConfig, minioConfig, embeddingConfig, deepseekConfig],
     }),
 
-    // Infrastructure
+    // Infrastructure (always needed)
     PrismaModule,
     RedisModule,
-    MinioModule,
-    MilvusModule,
     DifyModule,
-    EmbeddingModule,
-    QueueModule,
+    DeepSeekModule,
     SSEModule,
+
+    // Infrastructure (RAG stack — only in full mode)
+    ...(isFullMode ? [MinioModule, MilvusModule, EmbeddingModule, QueueModule] as const : []),
 
     // Business
     AuthModule,
     GatewayModule,
     ConversationModule,
     AgentModule,
-    KnowledgeModule,
+    ...(isFullMode ? [KnowledgeModule] as const : []),
     WorkOrderModule,
     AnalyticsModule,
     SystemModule,
