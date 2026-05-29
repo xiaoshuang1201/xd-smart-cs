@@ -11,9 +11,11 @@ import { appConfig, databaseConfig, redisConfig, jwtConfig, difyConfig, minioCon
 // Infrastructure (always needed)
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
-import { DifyModule } from './infrastructure/dify/dify.module';
 import { DeepSeekModule } from './infrastructure/deepseek/deepseek.module';
 import { SSEModule } from './infrastructure/sse/sse.module';
+
+// Infrastructure (full mode only — RAG + file storage)
+import { DifyModule } from './infrastructure/dify/dify.module';
 
 // Infrastructure (RAG stack — only in full mode)
 import { MinioModule } from './infrastructure/minio/minio.module';
@@ -54,12 +56,11 @@ const isFullMode = process.env.DEPLOY_MODE !== 'slim';
     // Infrastructure (always needed)
     PrismaModule,
     RedisModule,
-    DifyModule,
     DeepSeekModule,
     SSEModule,
 
-    // Infrastructure (RAG stack — only in full mode)
-    ...(isFullMode ? [MinioModule, MilvusModule, EmbeddingModule, QueueModule] as const : []),
+    // Infrastructure (full mode only)
+    ...(isFullMode ? [DifyModule, MinioModule, MilvusModule, EmbeddingModule, QueueModule] as const : []),
 
     // Business
     AuthModule,

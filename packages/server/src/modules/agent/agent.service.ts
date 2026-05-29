@@ -2,27 +2,20 @@ import { Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
-import { DifyService } from '../../infrastructure/dify/dify.service';
 import { DeepSeekService } from '../../infrastructure/deepseek/deepseek.service';
 import type { DeepSeekMessage } from '../../infrastructure/deepseek/deepseek.service';
 import { IntentResolverService } from './intent-resolver.service';
-import { CircuitBreakerService } from './circuit-breaker.service';
+import { FAQ_DATASET, matchFAQ } from './faq.data';
 import type { ConversationContext } from '../conversation/context-manager.service';
 
-const SYSTEM_PROMPTS: Record<string, string> = {
-  product_inquiry:
-    '你是新鼎电炉科技的AI客服，专门回答电炉设备的产品参数、选型推荐等问题。请根据你的专业知识给出准确、详细的回答。如果不确定，请如实告知并建议联系人工客服。',
-  price:
-    '你是新鼎电炉科技的AI客服，用户正在询价。请友好回应，说明具体价格需根据配置和需求定制，建议用户留下联系方式或转人工客服获取正式报价。',
-  after_sales:
-    '你是新鼎电炉科技的AI客服，用户遇到了售后问题。请先了解故障现象，提供基础的排查建议。复杂问题建议转人工客服处理。',
-  installation:
-    '你是新鼎电炉科技的AI客服，用户咨询安装调试相关事宜。请提供通用的安装注意事项，具体方案建议联系技术支持团队。',
-  transfer:
-    '你是新鼎电炉科技的AI客服，用户希望转人工。请友好回应，告知用户人工客服的工作时间（工作日9:00-18:00），并提供联系方式。',
-  chat:
-    '你是新鼎电炉科技的AI客服助手，专门服务电炉行业客户。请友好、专业地回答用户问题。',
-};
+const SYSTEM_PROMPT = `你是新鼎电炉科技的AI客服助手。公司主营IGBT中频感应熔炼炉、加热炉、热处理炉等电炉设备。
+
+请遵守以下规则：
+1. 用中文回答，专业、准确、友好
+2. 如果问题超出你的知识范围，诚实地告知用户，并建议联系人工客服
+3. 不要编造技术参数，不确定的就说需要和技术团队确认
+4. 遇到询价时，说明价格需根据配置定制，建议留联系方式
+5. 遇到报修/故障，先了解情况，给出基础排查建议，严重的建议联系售后`;
 
 @Injectable()
 export class AgentService {
@@ -31,10 +24,8 @@ export class AgentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    private readonly difyService: DifyService,
     private readonly deepseekService: DeepSeekService,
     private readonly intentResolver: IntentResolverService,
-    private readonly circuitBreaker: CircuitBreakerService,
   ) {}
 
   async generateResponse(
@@ -43,18 +34,21 @@ export class AgentService {
     visitorId: string,
   ): Promise<Array<{ event: string; data: unknown }>> {
     const events: Array<{ event: string; data: unknown }> = [];
+    const startTime = Date.now();
 
     // 1. 意图识别
     const intent = await this.intentResolver.resolve(query);
+    this.logger.log(`[Agent] query="${query.slice(0, 50)}" intent=${intent.intent} confidence=${intent.confidence}`);
     events.push({
       event: 'thinking',
       data: { phase: 'intent_recognition', intent: intent.intent, confidence: intent.confidence },
     });
 
-    // 2. 检查RAG缓存
+    // 2. 检查缓存
     const questionHash = this.hashQuestion(query);
     const cached = await this.redis.hgetall(`rag:answer:${questionHash}`);
     if (cached?.answer) {
+      this.logger.log(`[Agent] Cache HIT for "${query.slice(0, 30)}"`);
       events.push({
         event: 'done',
         data: {
@@ -69,149 +63,179 @@ export class AgentService {
       return events;
     }
 
-    // 3. 搜索中提示
-    events.push({ event: 'searching', data: { phase: 'rag_retrieval', sourcesFound: 0 } });
-
-    // 4. 选择 AI 通路：Dify 可用则走 Dify，否则直调 DeepSeek
-    const difyHealthy = await this.difyService.isHealthy();
-    const result = await (difyHealthy
-      ? this.callViaDify(query, visitorId, intent.intent)
-      : this.callViaDeepSeek(query, context, intent.intent));
-
-    events.push({
-      event: 'done',
-      data: {
-        messageId: result.messageId,
-        intent: intent.intent,
-        confidenceScore: intent.confidence,
-        retrievalSources: result.retrievalSources,
-        tokensUsed: result.tokensUsed,
-        fullContent: result.answer,
-      },
-    });
-
-    // 缓存结果
-    await this.redis.hmset(`rag:answer:${questionHash}`, {
-      question: query,
-      answer: result.answer,
-      intent: intent.intent,
-      confidenceScore: String(intent.confidence),
-      retrievalSources: JSON.stringify(result.retrievalSources || []),
-      tokensUsed: String(result.tokensUsed || 0),
-      hitCount: '1',
-      createdAt: new Date().toISOString(),
-      lastHitAt: new Date().toISOString(),
-    });
-    await this.redis.expire(`rag:answer:${questionHash}`, 86400);
-
-    // 更新热问排行
-    await this.redis.zincrby(
-      `stats:hot:daily:${new Date().toISOString().slice(0, 10)}`,
-      1,
-      query.slice(0, 100),
-    );
-
-    return events;
-  }
-
-  private async callViaDify(query: string, visitorId: string, intent: string) {
-    try {
-      const result = await this.circuitBreaker.call(
-        () =>
-          this.difyService.chatBlocking({
-            query,
-            user: visitorId,
-            inputs: { intent },
-            response_mode: 'blocking',
-          }),
-        async () => {
-          throw new Error('CIRCUIT_OPEN');
+    // 3. FAQ 问答集匹配
+    const faqMatch = matchFAQ(query);
+    if (faqMatch) {
+      this.logger.log(`[Agent] FAQ MATCH: "${faqMatch.question}" (score from keywords)`);
+      const answer = faqMatch.answer;
+      events.push({
+        event: 'done',
+        data: {
+          messageId: `faq_${Date.now()}`,
+          intent: faqMatch.intent,
+          confidenceScore: 0.95,
+          retrievalSources: [{ source: 'FAQ', question: faqMatch.question }],
+          tokensUsed: 0,
+          fullContent: answer,
         },
+      });
+      await this.cacheAnswer(questionHash, query, answer, faqMatch.intent, 0.95, '[]', '0');
+      return events;
+    }
+
+    // 4. 调用 DeepSeek
+    events.push({ event: 'searching', data: { phase: 'llm_query', sourcesFound: 0 } });
+    this.logger.log(`[Agent] Calling DeepSeek for: "${query.slice(0, 50)}"`);
+
+    try {
+      const result = await this.callDeepSeek(query, context, intent.intent);
+
+      const elapsed = Date.now() - startTime;
+      this.logger.log(`[Agent] DeepSeek responded in ${elapsed}ms, tokens=${result.tokensUsed}`);
+
+      events.push({
+        event: 'done',
+        data: {
+          messageId: result.messageId,
+          intent: intent.intent,
+          confidenceScore: intent.confidence,
+          retrievalSources: [] as Array<Record<string, unknown>>,
+          tokensUsed: result.tokensUsed,
+          fullContent: result.answer,
+        },
+      });
+
+      await this.cacheAnswer(
+        questionHash,
+        query,
+        result.answer,
+        intent.intent,
+        intent.confidence,
+        '[]',
+        String(result.tokensUsed),
       );
 
-      return {
-        answer: result.answer,
-        messageId: result.message_id,
-        tokensUsed: result.metadata?.usage?.total_tokens || 0,
-        retrievalSources: result.metadata?.retriever_resources || [],
-      };
+      return events;
     } catch (error) {
-      this.logger.warn(`Dify unavailable, falling back to DeepSeek: ${error.message}`);
-      return this.callViaDeepSeek(query, null, intent);
+      this.logger.error(`[Agent] DeepSeek call failed: ${error.message}`);
+      const fallbackMsg = '抱歉，AI服务暂时不可用，请稍后再试。如需紧急帮助，请拨打客服热线。';
+      events.push({
+        event: 'done',
+        data: {
+          messageId: `err_${Date.now()}`,
+          intent: intent.intent,
+          confidenceScore: 0,
+          retrievalSources: [],
+          tokensUsed: 0,
+          fullContent: fallbackMsg,
+        },
+      });
+      return events;
     }
   }
 
-  private async callViaDeepSeek(
+  private async callDeepSeek(
     query: string,
     context: ConversationContext | null,
-    intent: string,
+    _intent: string,
   ) {
-    const systemPrompt = SYSTEM_PROMPTS[intent] || SYSTEM_PROMPTS.chat;
-
     const messages: DeepSeekMessage[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: SYSTEM_PROMPT },
     ];
 
+    // 附加上下文中的对话历史（最近4轮）
     if (context?.slidingWindow?.length) {
-      for (const msg of context.slidingWindow.slice(-6)) {
-        messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
+      for (const msg of context.slidingWindow.slice(-8)) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          messages.push({ role: msg.role, content: msg.content });
+        }
       }
     }
 
     messages.push({ role: 'user', content: query });
 
-    const result = await this.deepseekService.chat(messages);
+    const result = await this.deepseekService.chat(messages, {
+      temperature: 0.7,
+      maxTokens: 1024,
+    });
 
     return {
       answer: result.answer,
       messageId: result.messageId,
       tokensUsed: result.tokensUsed,
-      retrievalSources: [] as Array<Record<string, unknown>>,
     };
   }
 
-  async testQuery(query: string, config?: Record<string, unknown>) {
-    const intent = await this.intentResolver.resolve(query);
-    const difyHealthy = await this.difyService.isHealthy();
-
-    if (difyHealthy) {
-      const result = await this.difyService.chatBlocking({
-        query,
-        user: 'admin-test',
-        inputs: config || {},
-        response_mode: 'blocking',
+  private async cacheAnswer(
+    hash: string,
+    question: string,
+    answer: string,
+    intent: string,
+    confidence: number,
+    sources: string,
+    tokens: string,
+  ) {
+    try {
+      await this.redis.hmset(`rag:answer:${hash}`, {
+        question,
+        answer,
+        intent,
+        confidenceScore: String(confidence),
+        retrievalSources: sources,
+        tokensUsed: tokens,
+        hitCount: '1',
+        createdAt: new Date().toISOString(),
+        lastHitAt: new Date().toISOString(),
       });
+      await this.redis.expire(`rag:answer:${hash}`, 86400);
+
+      await this.redis.zincrby(
+        `stats:hot:daily:${new Date().toISOString().slice(0, 10)}`,
+        1,
+        question.slice(0, 100),
+      );
+    } catch (err) {
+      this.logger.warn(`Failed to cache answer: ${err.message}`);
+    }
+  }
+
+  async testQuery(query: string) {
+    const startTime = Date.now();
+    const intent = await this.intentResolver.resolve(query);
+
+    // FAQ match first
+    const faqMatch = matchFAQ(query);
+    if (faqMatch) {
       return {
         query,
         intent,
-        answer: result.answer,
-        tokensUsed: result.metadata?.usage?.total_tokens,
-        retrievalSources: result.metadata?.retriever_resources,
-        backend: 'dify' as const,
+        answer: faqMatch.answer,
+        tokensUsed: 0,
+        source: 'faq' as const,
+        elapsed: Date.now() - startTime,
       };
     }
 
-    // Fallback to DeepSeek
-    const systemPrompt = SYSTEM_PROMPTS[intent.intent] || SYSTEM_PROMPTS.chat;
+    // DeepSeek
+    const systemPrompt = SYSTEM_PROMPT;
     const result = await this.deepseekService.chat([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: query },
     ]);
+
     return {
       query,
       intent,
       answer: result.answer,
       tokensUsed: result.tokensUsed,
-      retrievalSources: [],
-      backend: 'deepseek' as const,
+      source: 'deepseek' as const,
+      elapsed: Date.now() - startTime,
     };
   }
 
   async getConfig() {
     return this.prisma.systemConfig.findMany({
-      where: {
-        configKey: { startsWith: 'agent.' },
-      },
+      where: { configKey: { startsWith: 'agent.' } },
     });
   }
 
