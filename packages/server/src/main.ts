@@ -1,3 +1,7 @@
+// 必须在最前面加载 .env，确保 DEPLOY_MODE 等变量在模块导入前就位
+import { config } from 'dotenv';
+config({ path: ['.env', '.env.local'] });
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
