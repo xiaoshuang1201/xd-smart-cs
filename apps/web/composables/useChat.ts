@@ -26,7 +26,7 @@ export function useChat() {
   async function sendMessage(content: string): Promise<void> {
     if (!store.sessionToken || !store.conversationId) return
 
-    const { data } = await useFetch<{ code: number; data: SendMessageResponse }>(
+    const { data } = await useFetch<{ code: number; data: any }>(
       `${config.public.apiBase}/v1/conversations/${store.conversationId}/messages`,
       {
         method: 'POST',
@@ -39,17 +39,33 @@ export function useChat() {
     )
 
     if (data.value?.data) {
-      const msg: ChatMessage = {
-        id: data.value.data.messageId,
+      const d = data.value.data
+      // 存储用户消息
+      store.addMessage({
+        id: d.messageId,
         role: 'user',
-        content: data.value.data.content,
-        createdAt: data.value.data.createdAt,
-      }
-      store.addMessage(msg)
-      store.setStreaming(true)
+        content: d.content,
+        createdAt: d.createdAt,
+      })
 
-      const sseUrl = data.value.data.sseStreamUrl
-      connectSSE(sseUrl)
+      // 后端同步返回了 AI 回复
+      if (d.reply?.content) {
+        store.addMessage({
+          id: d.reply.messageId,
+          role: 'assistant',
+          content: d.reply.content,
+          intent: d.reply.intent,
+          confidenceScore: d.reply.confidenceScore,
+          retrievalSources: d.reply.retrievalSources,
+          tokensUsed: d.reply.tokensUsed,
+          createdAt: d.reply.createdAt,
+        })
+      }
+
+      // 如果后端有 SSE 流，也连接上监听
+      if (d.sseStreamUrl) {
+        connectSSE(d.sseStreamUrl)
+      }
     }
   }
 
@@ -65,17 +81,24 @@ export function useChat() {
             break
           case 'done': {
             typing.finish()
-            const assistantMsg: ChatMessage = {
-              id: event.messageId,
-              role: 'assistant',
-              content: event.fullContent,
-              intent: event.intent,
-              confidenceScore: event.confidenceScore,
-              retrievalSources: event.retrievalSources,
-              tokensUsed: event.tokensUsed,
-              createdAt: new Date().toISOString(),
+            // 避免重复添加（同步返回已经加了）
+            if (event.fullContent) {
+              const exists = store.messages.find(
+                (m) => m.id === event.messageId && m.role === 'assistant',
+              )
+              if (!exists) {
+                store.addMessage({
+                  id: event.messageId,
+                  role: 'assistant',
+                  content: event.fullContent,
+                  intent: event.intent,
+                  confidenceScore: event.confidenceScore,
+                  retrievalSources: event.retrievalSources,
+                  tokensUsed: event.tokensUsed,
+                  createdAt: new Date().toISOString(),
+                })
+              }
             }
-            store.addMessage(assistantMsg)
             store.setStreaming(false)
             break
           }

@@ -22,7 +22,6 @@ export class GatewayService {
   ) {}
 
   async handleIncomingMessage(sessionToken: string, dto: SendMessageDto) {
-    // 1. 验证会话身份
     const session = await this.redis.hgetall(`session:token:${sessionToken}`);
     if (!session || !session.conversationId) {
       throw new UnauthorizedException('会话已过期或无效');
@@ -30,24 +29,76 @@ export class GatewayService {
 
     const conversationId = dto.conversationId || session.conversationId;
 
-    // 2. 存储用户消息
-    const message = await this.messageService.createMessage({
+    // 1. 存储用户消息
+    const userMsg = await this.messageService.createMessage({
       conversationId,
       role: 'user',
       content: dto.content,
     });
+    this.logger.log(`[Gateway] User message saved: ${userMsg.id}`);
 
-    // 3. 异步触发Agent响应
-    this.processAgentResponse(conversationId, message.id, dto.content, session.visitorId)
-      .catch((err) => this.logger.error(`Agent processing failed: ${err.message}`));
+    // 2. 获取上下文
+    const context = await this.contextManager.getContext(conversationId);
 
+    // 3. 调用 Agent 生成回复
+    this.logger.log(`[Gateway] Calling agent for: "${dto.content.slice(0, 50)}"`);
+    const events = await this.agentService.generateResponse(dto.content, context, session.visitorId);
+
+    // 4. 提取 AI 回复内容
+    let aiContent = '';
+    for (const evt of events) {
+      if (evt.event === 'done') {
+        aiContent = (evt.data as any).fullContent || '';
+        break;
+      }
+    }
+
+    if (!aiContent) {
+      this.logger.warn(`[Gateway] Agent returned no content`);
+      aiContent = '抱歉，AI回复出了点问题，请稍后再试。';
+    }
+
+    // 5. 存储 AI 回复
+    const aiMsg = await this.messageService.createMessage({
+      conversationId,
+      role: 'assistant',
+      content: aiContent,
+    });
+
+    // 6. 更新对话
+    await this.prisma.conversation.update({
+      where: { id: conversationId },
+      data: { messageCount: { increment: 2 } },
+    });
+    await this.contextManager.updateContext(conversationId, { role: 'user', content: dto.content });
+    await this.contextManager.updateContext(conversationId, { role: 'assistant', content: aiContent });
+
+    // 7. 如果有活跃的 SSE 连接，推送事件
+    if (this.sseManager.isConnected(conversationId)) {
+      for (const evt of events) {
+        this.sseManager.sendToConversation(conversationId, evt.event, evt.data);
+      }
+    }
+
+    // 8. 同步返回完整结果
+    const doneEvent = events.find((e) => e.event === 'done')?.data as any;
     return {
-      messageId: message.id,
+      messageId: userMsg.id,
       conversationId,
       role: 'user',
       content: dto.content,
-      createdAt: message.createdAt.toISOString(),
-      sseStreamUrl: `/v1/conversations/${conversationId}/stream`,
+      createdAt: userMsg.createdAt.toISOString(),
+      reply: {
+        messageId: aiMsg.id,
+        conversationId,
+        role: 'assistant',
+        content: aiContent,
+        createdAt: aiMsg.createdAt.toISOString(),
+        intent: doneEvent?.intent || 'chat',
+        confidenceScore: doneEvent?.confidenceScore || 0,
+        retrievalSources: doneEvent?.retrievalSources || [],
+        tokensUsed: doneEvent?.tokensUsed || 0,
+      },
     };
   }
 
@@ -64,74 +115,5 @@ export class GatewayService {
     }
 
     this.sseManager.register(conversationId, res);
-  }
-
-  private async processAgentResponse(
-    conversationId: string,
-    userMessageId: string,
-    query: string,
-    visitorId: string,
-  ) {
-    try {
-      this.logger.log(`[Gateway] Agent start — convId=${conversationId} query="${query.slice(0, 50)}"`);
-
-      // 获取对话上下文
-      const context = await this.contextManager.getContext(conversationId);
-      this.logger.log(`[Gateway] Context loaded — messages=${context.slidingWindow.length}`);
-
-      // 调用Agent生成回复
-      const events = await this.agentService.generateResponse(query, context, visitorId);
-      this.logger.log(`[Gateway] Agent returned ${events.length} events`);
-
-      // 等待 SSE 连接建立（前端可能在 Agent 处理期间还没连上来）
-      let waited = 0;
-      while (!this.sseManager.isConnected(conversationId) && waited < 3000) {
-        await new Promise((r) => setTimeout(r, 100));
-        waited += 100;
-      }
-      this.logger.log(`[Gateway] SSE ready — waited=${waited}ms connected=${this.sseManager.isConnected(conversationId)}`);
-
-      // 流式推送SSE事件
-      for (const event of events) {
-        const sent = this.sseManager.sendToConversation(conversationId, event.event, event.data);
-        this.logger.log(`[Gateway] SSE event="${event.event}" sent=${sent}`);
-
-        if (event.event === 'done') {
-          // 持久化AI消息
-          const doneData = event.data as any;
-          await this.messageService.createMessage({
-            conversationId,
-            role: 'assistant',
-            content: doneData.fullContent || doneData.content || '',
-          });
-
-          // 更新对话计数
-          await this.prisma.conversation.update({
-            where: { id: conversationId },
-            data: {
-              messageCount: { increment: 2 },
-              agentConfidence: doneData.confidenceScore,
-            },
-          });
-
-          // 更新对话上下文
-          await this.contextManager.updateContext(conversationId, {
-            role: 'user',
-            content: query,
-          });
-          await this.contextManager.updateContext(conversationId, {
-            role: 'assistant',
-            content: doneData.fullContent || '',
-          });
-        }
-      }
-    } catch (error) {
-      this.logger.error(`[Gateway] Agent failed: ${error.message}`, error.stack);
-      this.sseManager.sendToConversation(conversationId, 'error', {
-        type: 'error',
-        code: 50201,
-        message: `AI服务异常: ${error.message}`,
-      });
-    }
   }
 }
