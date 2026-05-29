@@ -13,7 +13,7 @@ export class AgentController {
   @Post('test')
   @ApiOperation({ summary: 'Agent对话测试' })
   async testAgent(@Body() body: { query: string; config?: Record<string, unknown> }) {
-    return this.agentService.testQuery(body.query, body.config);
+    return this.agentService.testQuery(body.query);
   }
 
   @Get('config')
