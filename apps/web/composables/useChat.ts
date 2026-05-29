@@ -70,6 +70,7 @@ export function useChat() {
   }
 
   function connectSSE(url: string) {
+    if (!url) return
     const fullUrl = url.startsWith('http') ? url : `${config.public.apiBase}${url}`
 
     connect(
