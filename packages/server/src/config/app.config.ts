@@ -23,27 +23,8 @@ export const jwtConfig = registerAs('jwt', () => ({
   refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
 }));
 
-export const difyConfig = registerAs('dify', () => ({
-  apiUrl: process.env.DIFY_API_URL || 'http://localhost:5001/v1',
-  apiKey: process.env.DIFY_API_KEY || '',
-  timeout: parseInt(process.env.DIFY_TIMEOUT || '30000', 10),
-}));
-
-export const minioConfig = registerAs('minio', () => ({
-  endpoint: process.env.MINIO_ENDPOINT || 'localhost',
-  port: parseInt(process.env.MINIO_PORT || '9000', 10),
-  accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-  secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
-  bucket: process.env.MINIO_BUCKET || 'knowledge-docs',
-}));
-
 export const deepseekConfig = registerAs('deepseek', () => ({
   apiKey: process.env.DEEPSEEK_API_KEY || '',
   apiUrl: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1',
   model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
-}));
-
-export const embeddingConfig = registerAs('embedding', () => ({
-  url: process.env.BGE_EMBEDDING_URL || 'http://localhost:8000',
-  model: process.env.BGE_EMBEDDING_MODEL || 'BAAI/bge-large-zh-v1.5',
 }));
