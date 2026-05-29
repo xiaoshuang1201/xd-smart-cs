@@ -73,15 +73,20 @@ export class GatewayService {
     visitorId: string,
   ) {
     try {
+      this.logger.log(`[Gateway] Agent start — convId=${conversationId} query="${query.slice(0, 50)}"`);
+
       // 获取对话上下文
       const context = await this.contextManager.getContext(conversationId);
+      this.logger.log(`[Gateway] Context loaded — messages=${context.slidingWindow.length}`);
 
       // 调用Agent生成回复
       const events = await this.agentService.generateResponse(query, context, visitorId);
+      this.logger.log(`[Gateway] Agent returned ${events.length} events`);
 
       // 流式推送SSE事件
       for (const event of events) {
-        this.sseManager.sendToConversation(conversationId, event.event, event.data);
+        const sent = this.sseManager.sendToConversation(conversationId, event.event, event.data);
+        this.logger.log(`[Gateway] SSE event="${event.event}" sent=${sent} connected=${this.sseManager.isConnected(conversationId)}`);
 
         if (event.event === 'done') {
           // 持久化AI消息
@@ -113,6 +118,7 @@ export class GatewayService {
         }
       }
     } catch (error) {
+      this.logger.error(`[Gateway] Agent failed: ${error.message}`, error.stack);
       this.sseManager.sendToConversation(conversationId, 'error', {
         type: 'error',
         code: 50201,
