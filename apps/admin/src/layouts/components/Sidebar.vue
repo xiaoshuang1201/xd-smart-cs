@@ -72,8 +72,8 @@ watch(
   { immediate: true },
 )
 
-function handleMenuClick({ key }: { key: string }) {
-  router.push(`/${key}`)
+function handleMenuClick({ key }: { key: string | number }) {
+  router.push(`/${String(key)}`)
 }
 </script>
 

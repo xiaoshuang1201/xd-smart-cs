@@ -79,7 +79,7 @@ import StatCard from '~/components/common/StatCard.vue'
 import { analyticsApi } from '~/api/analytics.api'
 
 const loading = ref(false)
-const dateRange = ref<any[]>([dayjs().subtract(7, 'day'), dayjs()])
+const dateRange = ref<[ReturnType<typeof dayjs>, ReturnType<typeof dayjs>]>([dayjs().subtract(7, 'day'), dayjs()])
 const dashboard = ref<Record<string, any>>({
   totalConversations: 0,
   totalMessages: 0,

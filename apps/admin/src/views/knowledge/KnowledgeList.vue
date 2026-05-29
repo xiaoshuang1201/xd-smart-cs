@@ -82,9 +82,9 @@ async function fetchData() {
   } finally { loading.value = false }
 }
 
-function handleTableChange(pag: { current: number; pageSize: number }) {
-  page.value = pag.current
-  pageSize.value = pag.pageSize
+function handleTableChange(pag: { current?: number; pageSize?: number }) {
+  page.value = pag.current || 1
+  pageSize.value = pag.pageSize || 20
   fetchData()
 }
 

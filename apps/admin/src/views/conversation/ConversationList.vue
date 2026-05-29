@@ -61,11 +61,11 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 
-const columns = [
+const columns: any[] = [
   { title: '状态', key: 'status', width: 100 },
   { title: '首条消息', key: 'firstMessage', ellipsis: true },
   { title: '消息数', dataIndex: 'messageCount', width: 80 },
-  { title: '置信度', dataIndex: 'agentConfidence', width: 80, align: 'center' },
+  { title: '置信度', dataIndex: 'agentConfidence', width: 80, align: 'center' as const },
   { title: '创建时间', key: 'createdAt', width: 170 },
   { title: '操作', key: 'action', width: 80 },
 ]
@@ -95,9 +95,9 @@ function resetFilters() {
   fetchData()
 }
 
-function handleTableChange(pag: { current: number; pageSize: number }) {
-  page.value = pag.current
-  pageSize.value = pag.pageSize
+function handleTableChange(pag: { current?: number; pageSize?: number }) {
+  page.value = pag.current || 1
+  pageSize.value = pag.pageSize || 20
   fetchData()
 }
 
