@@ -47,7 +47,7 @@ export class GatewayService {
       role: 'user',
       content: dto.content,
       createdAt: message.createdAt.toISOString(),
-      sseStreamUrl: `/api/conversations/${conversationId}/stream`,
+      sseStreamUrl: `/v1/conversations/${conversationId}/stream`,
     };
   }
 
