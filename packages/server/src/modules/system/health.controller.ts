@@ -2,8 +2,6 @@ import { Controller, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService, PrismaHealthIndicator } from '@nestjs/terminus';
 import { RedisHealthIndicator } from '../../infrastructure/redis/redis.health';
-import { MinioHealthIndicator } from '../../infrastructure/minio/minio.health';
-import { MilvusHealthIndicator } from '../../infrastructure/milvus/milvus.health';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { Public } from '../../common/decorators/public.decorator';
 
@@ -15,8 +13,6 @@ export class HealthController {
     private readonly prisma: PrismaHealthIndicator,
     private readonly prismaService: PrismaService,
     private readonly redis: RedisHealthIndicator,
-    private readonly minio: MinioHealthIndicator,
-    private readonly milvus: MilvusHealthIndicator,
   ) {}
 
   @Public()
@@ -27,8 +23,6 @@ export class HealthController {
     return this.health.check([
       () => this.prisma.pingCheck('database', this.prismaService),
       () => this.redis.isHealthy('redis'),
-      () => this.minio.isHealthy('minio'),
-      () => this.milvus.isHealthy('milvus'),
     ]);
   }
 }
