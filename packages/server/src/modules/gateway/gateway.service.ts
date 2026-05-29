@@ -83,10 +83,18 @@ export class GatewayService {
       const events = await this.agentService.generateResponse(query, context, visitorId);
       this.logger.log(`[Gateway] Agent returned ${events.length} events`);
 
+      // 等待 SSE 连接建立（前端可能在 Agent 处理期间还没连上来）
+      let waited = 0;
+      while (!this.sseManager.isConnected(conversationId) && waited < 3000) {
+        await new Promise((r) => setTimeout(r, 100));
+        waited += 100;
+      }
+      this.logger.log(`[Gateway] SSE ready — waited=${waited}ms connected=${this.sseManager.isConnected(conversationId)}`);
+
       // 流式推送SSE事件
       for (const event of events) {
         const sent = this.sseManager.sendToConversation(conversationId, event.event, event.data);
-        this.logger.log(`[Gateway] SSE event="${event.event}" sent=${sent} connected=${this.sseManager.isConnected(conversationId)}`);
+        this.logger.log(`[Gateway] SSE event="${event.event}" sent=${sent}`);
 
         if (event.event === 'done') {
           // 持久化AI消息
