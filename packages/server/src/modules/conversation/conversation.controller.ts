@@ -22,6 +22,20 @@ export class VisitorConversationController {
   }
 
   @Public()
+  @Get('conversations/:id/messages')
+  @ApiHeader({ name: 'X-Session-Token', required: true })
+  @ApiOperation({ summary: '获取指定会话消息列表' })
+  getMessages(
+    @Param('id') id: string,
+    @Headers('x-session-token') token: string,
+    @Query('page') page = 1,
+    @Query('pageSize') pageSize = 50,
+    @Query('order') order: 'asc' | 'desc' = 'asc',
+  ) {
+    return this.conversationService.getVisitorMessages(token, id, +page, +pageSize);
+  }
+
+  @Public()
   @Post('conversations/:id/close')
   @ApiHeader({ name: 'X-Session-Token', required: true })
   @ApiOperation({ summary: '关闭会话' })

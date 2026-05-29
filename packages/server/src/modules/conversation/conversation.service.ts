@@ -39,6 +39,17 @@ export class ConversationService {
     };
   }
 
+  async getVisitorMessages(token: string, id: string, page: number, pageSize: number) {
+    await this.verifyOwnership(id, token);
+    const messages = await this.prisma.message.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'asc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    });
+    return messages;
+  }
+
   // 管理后台: 对话列表
   async listConversations(params: { page: number; pageSize: number; status?: string; keyword?: string }) {
     const where: Record<string, unknown> = {};
